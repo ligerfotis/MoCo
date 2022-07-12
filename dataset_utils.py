@@ -5,7 +5,11 @@ from random import random
 
 import torch
 from PIL import ImageFilter
+from PIL import Image
+from torch import nn
+from torch.utils.data import DataLoader
 from torchvision import datasets
+from torchvision.datasets import CIFAR10
 from torchvision.transforms import transforms
 
 
@@ -46,68 +50,53 @@ def create_labels(num_pos_pairs, previous_max_label, device):
 ######################
 ### from MoCo repo ###
 ######################
-def create_dataset(batch_size, n_workers):
-    normalize = transforms.Normalize([0.4914, 0.4822, 0.4465], [0.2023, 0.1994, 0.2010])
+class CIFAR10Pair(CIFAR10):
+    """CIFAR10 Dataset.
+    """
+    def __getitem__(self, index):
+        img = self.data[index]
+        img = Image.fromarray(img)
 
-    train_transform = transforms.Compose(
-        [
-            transforms.RandomResizedCrop(32),
-            transforms.RandomHorizontalFlip(p=0.5),
-            transforms.RandomApply([transforms.ColorJitter(0.4, 0.4, 0.4, 0.1)], p=0.8),
-            transforms.RandomGrayscale(p=0.2),
-            transforms.ToTensor(),
-            normalize,
-        ]
-    )
+        if self.transform is not None:
+            im_1 = self.transform(img)
+            im_2 = self.transform(img)
 
-    train_transform = TwoCropsTransform(train_transform)
+        return im_1, im_2
 
-    val_transform = transforms.Compose([transforms.ToTensor(), normalize])
 
-    train_dataset = datasets.CIFAR10(
-        "dataset", train=True, download=True, transform=train_transform
-    )
-    train_dataset_for_eval = datasets.CIFAR10(
-        "dataset", train=True, download=True, transform=val_transform
-    )
-    val_dataset = datasets.CIFAR10(
-        "dataset", train=False, download=True, transform=val_transform
-    )
+def create_dataset(args):
+    train_transform = transforms.Compose([
+        transforms.RandomResizedCrop(32),
+        transforms.RandomHorizontalFlip(p=0.5),
+        transforms.RandomApply([transforms.ColorJitter(0.4, 0.4, 0.4, 0.1)], p=0.8),
+        transforms.RandomGrayscale(p=0.2),
+        transforms.ToTensor(),
+        transforms.Normalize([0.4914, 0.4822, 0.4465], [0.2023, 0.1994, 0.2010])])
 
-    train_loader = torch.utils.data.DataLoader(
-        train_dataset,
-        batch_size=batch_size,
-        shuffle=True,
-        num_workers=n_workers,
-        pin_memory=True,
-        drop_last=True,
-    )
+    test_transform = transforms.Compose([
+        transforms.ToTensor(),
+        transforms.Normalize([0.4914, 0.4822, 0.4465], [0.2023, 0.1994, 0.2010])])
 
-    train_loader_for_eval = torch.utils.data.DataLoader(
-        train_dataset_for_eval,
-        batch_size=batch_size,
-        shuffle=False,
-        num_workers=n_workers,
-        pin_memory=True,
-        drop_last=False,
-    )
+    # data prepare
+    train_data = CIFAR10Pair(root='data', train=True, transform=train_transform, download=True)
+    train_loader = DataLoader(train_data, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers,
+                              pin_memory=True, drop_last=True)
 
-    val_loader = torch.utils.data.DataLoader(
-        val_dataset,
-        batch_size=batch_size,
-        shuffle=False,
-        num_workers=2,
-        pin_memory=True,
-        drop_last=False,
-    )
+    memory_data = CIFAR10(root='data', train=True, transform=test_transform, download=True)
+    memory_loader = DataLoader(memory_data, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers,
+                               pin_memory=True)
+
+    test_data = CIFAR10(root='data', train=False, transform=test_transform, download=True)
+    test_loader = DataLoader(test_data, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers,
+                             pin_memory=True)
 
     return (
-        train_dataset,
-        train_dataset_for_eval,
-        val_dataset,
+        train_data,
         train_loader,
-        train_loader_for_eval,
-        val_loader,
+        memory_data,
+        memory_loader,
+        test_data,
+        test_loader,
     )
 
 
@@ -116,7 +105,7 @@ def create_dataset(batch_size, n_workers):
 ######################
 # SplitBatchNorm: simulate multi-gpu behavior of BatchNorm in one gpu by splitting alone the batch dimension
 # implementation adapted from https://github.com/davidcpage/cifar10-fast/blob/master/torch_backend.py
-class SplitBatchNorm(torch.nn.BatchNorm2d):
+class SplitBatchNorm(nn.BatchNorm2d):
     def __init__(self, num_features, num_splits, **kw):
         super().__init__(num_features, **kw)
         self.num_splits = num_splits
@@ -126,34 +115,17 @@ class SplitBatchNorm(torch.nn.BatchNorm2d):
         if self.training or not self.track_running_stats:
             running_mean_split = self.running_mean.repeat(self.num_splits)
             running_var_split = self.running_var.repeat(self.num_splits)
-            outcome = torch.nn.functional.batch_norm(
-                input.view(-1, C * self.num_splits, H, W),
-                running_mean_split,
-                running_var_split,
-                self.weight.repeat(self.num_splits),
-                self.bias.repeat(self.num_splits),
-                True,
-                self.momentum,
-                self.eps,
-            ).view(N, C, H, W)
-            self.running_mean.data.copy_(
-                running_mean_split.view(self.num_splits, C).mean(dim=0)
-            )
-            self.running_var.data.copy_(
-                running_var_split.view(self.num_splits, C).mean(dim=0)
-            )
+            outcome = nn.functional.batch_norm(
+                input.view(-1, C * self.num_splits, H, W), running_mean_split, running_var_split,
+                self.weight.repeat(self.num_splits), self.bias.repeat(self.num_splits),
+                True, self.momentum, self.eps).view(N, C, H, W)
+            self.running_mean.data.copy_(running_mean_split.view(self.num_splits, C).mean(dim=0))
+            self.running_var.data.copy_(running_var_split.view(self.num_splits, C).mean(dim=0))
             return outcome
         else:
-            return torch.nn.functional.batch_norm(
-                input,
-                self.running_mean,
-                self.running_var,
-                self.weight,
-                self.bias,
-                False,
-                self.momentum,
-                self.eps,
-            )
+            return nn.functional.batch_norm(
+                input, self.running_mean, self.running_var,
+                self.weight, self.bias, False, self.momentum, self.eps)
 
 
 ######################
