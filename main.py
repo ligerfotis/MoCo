@@ -74,7 +74,7 @@ if use_wandb:
     device = torch.device("cuda")
     wandb.init(project="moco")
     wandb.run.name = f"moco_{args.batch_size}_{args.moco_k}"
-
+    wandb.config.update(args)
 
 (train_data, train_loader, memory_data, memory_loader, test_data, test_loader) = create_dataset(args)
 
@@ -144,6 +144,6 @@ for epoch in range(epoch_start, args.epochs + 1):
     data_frame = pd.DataFrame(data=results, index=range(epoch_start, epoch + 1))
     data_frame.to_csv(args.results_dir + '/log.csv', index_label='epoch')
     # save model
-    torch.save({'epoch': epoch, 'state_dict': model.state_dict(), 'optimizer' : optimizer.state_dict(),}, args.results_dir + '/model_last.pth')
+    torch.save({'epoch': epoch, 'state_dict': model.state_dict(), 'optimizer': optimizer.state_dict(),}, args.results_dir + '/model_last.pth')
     if use_wandb:
-        wandb.log({'test_accuracy': test_acc_1, 'train_loss': train_loss})
+        wandb.log({'test accuracy': test_acc_1, 'train loss': train_loss})
