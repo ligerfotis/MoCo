@@ -6,13 +6,21 @@
 # implementation follows http://github.com/zhirongw/lemniscate.pytorch and https://github.com/leftthomas/SimCLR
 import math
 import os
+import warnings
+
+import numpy as np
+import pandas as pd
 import torch.nn.functional as F
 import torch
+from sklearn.manifold import TSNE
+import seaborn as sns
 
 ######################
 ### from MoCo repo ###
 ######################
 # test using a knn monitor
+import wandb
+from matplotlib import pyplot as plt
 from tqdm import tqdm
 
 from dataset_utils import batch_shuffle_single_gpu, batch_unshuffle_single_gpu, create_labels
@@ -128,3 +136,42 @@ def save_model(encQ):
     if not os.path.exists(model_folder):
         os.makedirs(model_folder)
     torch.save(encQ.state_dict(), "{}/encQ_best.pth".format(model_folder))
+
+
+def viz_latent_space(title, model, test_dataset, args):
+    print("Visualizing latent space with tSNE")
+    data, labels = [], []
+    fig, ax = plt.subplots()
+    for sample in test_dataset:
+        img = sample[0].unsqueeze(0).to("cuda")
+        label = sample[1]
+        # Encode image
+        model.eval()
+        with torch.no_grad():
+            if model.type in ["dense", "vae_dense"]:
+                img = img.reshape(-1, args.size[0] * args.size[1]).to(model.device)  # Reshaping the image to (-1, 784)
+            encoded_img = model(img)
+        # Append to list
+        encoded_img = encoded_img.cpu().numpy().flatten()
+        data.append(encoded_img)
+        labels.append(label)
+    # run block of code and catch warnings
+    with warnings.catch_warnings():
+        # ignore all caught warnings
+        warnings.filterwarnings("ignore")
+        # execute code that will generate warnings
+        data = TSNE(init='pca', n_components=2).fit_transform(data)
+
+    df = pd.DataFrame({"x": data[:, 0], "y": data[:, 1], "hue": labels})
+
+    sns.scatterplot(x="x", y="y", data=df, hue="hue", legend="full", palette='colorblind').set(title=title)
+    viz_path = 'visualizations'
+    model_name = wandb.run.name
+
+    if not os.path.isdir(viz_path):
+        os.mkdir(viz_path)
+    fig.savefig(f"{viz_path}/{model_name}_data_vis.png")
+
+    fig.canvas.draw()
+    X = np.array(fig.canvas.renderer.buffer_rgba())
+    return X, f"{model_name}_data_vis.png"

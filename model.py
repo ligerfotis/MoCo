@@ -163,7 +163,7 @@ class ModelMoCo(nn.Module):
             loss_21, q2, k1 = self.contrastive_loss(im2, im1)
             loss = loss_12 + loss_21
             k = torch.cat([k1, k2], dim=0)
-        else:  # asymmetric loss
+        else:  # symmetric loss
             loss, q, k = self.contrastive_loss(im1, im2)
 
         self._dequeue_and_enqueue(k)
@@ -186,8 +186,8 @@ def copy_params(encQ, encK, m=None):
             param_k.data = param_k.data * m + param_q.data * (1.0 - m)
 
 
-def create_encoder(emb_dim, device):
-    model = ModelBase(emb_dim)
-    model = torch.nn.DataParallel(model)
-    model.to(device)
-    return model
+# def create_encoder(emb_dim, device):
+#     model = ModelBase(emb_dim)
+#     model = torch.nn.DataParallel(model)
+#     model.to(device)
+#     return model

@@ -18,8 +18,8 @@ from pytorch_metric_learning import losses
 from pytorch_metric_learning.utils import logging_presets
 
 from dataset_utils import create_dataset
-from model import copy_params, create_encoder, ModelMoCo
-from model_utils import save_model, test, train
+from model import ModelMoCo
+from model_utils import save_model, test, train, viz_latent_space
 
 parser = argparse.ArgumentParser(description='Train MoCo on CIFAR-10')
 
@@ -80,14 +80,14 @@ if use_wandb:
 
 # create model
 model = ModelMoCo(
-    dim=args.moco_dim,
-    K=args.moco_k,
-    m=args.moco_m,
-    T=args.moco_t,
-    arch=args.arch,
-    bn_splits=args.bn_splits,
-    symmetric=args.symmetric,
-).cuda()
+        dim=args.moco_dim,
+        K=args.moco_k,
+        m=args.moco_m,
+        T=args.moco_t,
+        arch=args.arch,
+        bn_splits=args.bn_splits,
+        symmetric=args.symmetric,
+    ).cuda()
 
 # print(model.encoder_q)
 
@@ -134,6 +134,12 @@ if not os.path.exists(args.results_dir):
 with open(args.results_dir + '/args.json', 'w') as fid:
     json.dump(args.__dict__, fid, indent=2)
 
+
+def plot_test_in_wandb(img_array, name, folder_name):
+    image = wandb.Image(img_array, caption=name)
+    wandb.log({folder_name: image})
+
+
 # training loop
 for epoch in range(epoch_start, args.epochs + 1):
     train_loss = train(model, train_loader, optimizer, epoch, optimizer, args)
@@ -147,3 +153,7 @@ for epoch in range(epoch_start, args.epochs + 1):
     torch.save({'epoch': epoch, 'state_dict': model.state_dict(), 'optimizer': optimizer.state_dict(),}, args.results_dir + '/model_last.pth')
     if use_wandb:
         wandb.log({'test accuracy': test_acc_1, 'train loss': train_loss})
+    title = f"Test data latent space at epoch {epoch}"
+    img_array, name = viz_latent_space(title, model.encoder_q, test_data, args)
+    if use_wandb:
+        plot_test_in_wandb(img_array, name, 'latent_representations')
